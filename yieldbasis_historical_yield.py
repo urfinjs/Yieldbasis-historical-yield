@@ -51,11 +51,15 @@ def get_web3_error_code(error):
 
 
 def get_block_timestamp(w3, block_number) -> int:
-    try:
-        block_data = w3.eth.get_block(block_number)
-        return block_data['timestamp']
-    except Exception as e:
-        logger.info(f"get_block_timestamp error: {e}")
+    for _ in range(3):
+        try:
+            block_data = w3.eth.get_block(block_number)
+            return block_data['timestamp']
+        except Exception as e:
+            logger.info(f"get_block_timestamp error: {e}")
+            if 'Too Many Requests' in str(e):
+                sleep(QUERY_COOLDOWN)
+                continue
     return 0
 
 
@@ -66,26 +70,34 @@ def timestamp_to_date(timestamp:int) -> str:
 
 
 def get_shares_balance(contract, address:str, block_number:int=None):
-    try:
-        return contract.functions.balanceOf(address).call(block_identifier=block_number)
-    except Exception as e:
-        logger.info(f"get_shares_balance error: {e}")
-        eroror_code = get_web3_error_code(e)
-        # provider errors of "historical state is not available" and "state is pruned"
-        if eroror_code is not None and eroror_code in [-32000, -32603]:
-            return -1
+    for _ in range(3):
+        try:
+            return contract.functions.balanceOf(address).call(block_identifier=block_number)
+        except Exception as e:
+            logger.info(f"get_shares_balance error: {e}")
+            if 'Too Many Requests' in str(e):
+                sleep(QUERY_COOLDOWN)
+                continue
+            eroror_code = get_web3_error_code(e)
+            # provider errors of "historical state is not available" and "state is pruned"
+            if eroror_code is not None and eroror_code in [-32000, -32603]:
+                return -1
     return 0
 
 
 def get_withdraw_amount(contract, shares:int, block_number:int=None):
-    try:
-        return contract.functions.preview_withdraw(shares).call(block_identifier=block_number)
-    except Exception as e:
-        logger.info(f"get_withdraw_amount error: {e}")
-        eroror_code = get_web3_error_code(e)
-        # provider errors of "historical state is not available" and "state is pruned"
-        if eroror_code is not None and eroror_code in [-32000, -32603]:
-            return -1
+    for _ in range(3):
+        try:
+            return contract.functions.preview_withdraw(shares).call(block_identifier=block_number)
+        except Exception as e:
+            logger.info(f"get_withdraw_amount error: {e}")
+            if 'Too Many Requests' in str(e):
+                sleep(QUERY_COOLDOWN)
+                continue
+            eroror_code = get_web3_error_code(e)
+            # provider errors of "historical state is not available" and "state is pruned"
+            if eroror_code is not None and eroror_code in [-32000, -32603]:
+                return -1
     return 0
 
 
@@ -100,6 +112,7 @@ blocks_per_day = 24*60*60//12 # eth mainnet has ~12 seconds per block
 current_block = w3.eth.get_block_number()
 current_block_timestamp = get_block_timestamp(w3, current_block)
 print(f'the latest block is {current_block} {timestamp_to_date(current_block_timestamp)}')
+sleep(QUERY_COOLDOWN)
 
 
 for pool_name, depositor_addresses in addresses_to_check.items():
@@ -162,3 +175,4 @@ for pool_name, depositor_addresses in addresses_to_check.items():
             parsed_gain_f = parsed_gain / divisors[pool_name]
             parsed_apr = parsed_gain / oldest_parsed_value / parsed_days * 365
             print(f"\tgained {parsed_gain_f:.8f} {pool_name} in {parsed_days:.1f} days for APR: {parsed_apr:.2%}")
+        sleep(QUERY_COOLDOWN)
