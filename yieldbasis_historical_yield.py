@@ -16,10 +16,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-MAX_DAYS_TO_PARSE = 4
+MAX_DAYS_TO_PARSE = 0
 # https://chainlist.org/chain/1
 RPC_PROVIDER = 'https://eth-mainnet.nodereal.io/v1/1659dfb40aa24bbb8153a677b98064d7'
-QUERY_COOLDOWN = 0.3
+QUERY_COOLDOWN = 0.5
 
 
 wBTC_pool_addr  = '0x6095a220C5567360d459462A25b1AD5aEAD45204'
@@ -40,6 +40,12 @@ with open(Path(__file__).parent / 'yieldbasis_pool_abi.json', 'r') as fh:
     yieldbasis_pool_abi = json.load(fh)
 
 
+def timestamp_to_date(timestamp:int) -> str:
+    if timestamp == 0:
+        return 'unknown'
+    return str(datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M'))
+
+
 def get_web3_error_code(error):
     if hasattr(error, 'code'):
         return error.code
@@ -51,53 +57,56 @@ def get_web3_error_code(error):
 
 
 def get_block_timestamp(w3, block_number) -> int:
-    for _ in range(3):
+    for attempt in range(1, 4):
         try:
             block_data = w3.eth.get_block(block_number)
             return block_data['timestamp']
         except Exception as e:
             logger.info(f"get_block_timestamp error: {e}")
             if 'Too Many Requests' in str(e):
-                sleep(QUERY_COOLDOWN)
-                continue
+                sleep(attempt*30 + QUERY_COOLDOWN)
+            else:
+                return 0
     return 0
 
 
-def timestamp_to_date(timestamp:int) -> str:
-    if timestamp == 0:
-        return 'unknown'
-    return str(datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M'))
-
-
 def get_shares_balance(contract, address:str, block_number:int=None):
-    for _ in range(3):
+    for attempt in range(1, 4):
         try:
             return contract.functions.balanceOf(address).call(block_identifier=block_number)
         except Exception as e:
             logger.info(f"get_shares_balance error: {e}")
-            if 'Too Many Requests' in str(e):
-                sleep(QUERY_COOLDOWN)
-                continue
-            eroror_code = get_web3_error_code(e)
-            # provider errors of "historical state is not available" and "state is pruned"
-            if eroror_code is not None and eroror_code in [-32000, -32603]:
-                return -1
+            error_str = str(e)
+            if 'Too Many Requests' in error_str:
+                sleep(attempt*30 + QUERY_COOLDOWN)
+            elif "Could not decode contract function" in error_str:
+                # probably the contract is not deployed at this block
+                return 0
+            else:
+                eroror_code = get_web3_error_code(e)
+                # provider has no data at this block: "historical state is not available" or "state is pruned"
+                if eroror_code is not None and eroror_code in [-32000, -32603]:
+                    return -1
     return 0
 
 
 def get_withdraw_amount(contract, shares:int, block_number:int=None):
-    for _ in range(3):
+    for attempt in range(1, 4):
         try:
             return contract.functions.preview_withdraw(shares).call(block_identifier=block_number)
         except Exception as e:
             logger.info(f"get_withdraw_amount error: {e}")
-            if 'Too Many Requests' in str(e):
-                sleep(QUERY_COOLDOWN)
-                continue
-            eroror_code = get_web3_error_code(e)
-            # provider errors of "historical state is not available" and "state is pruned"
-            if eroror_code is not None and eroror_code in [-32000, -32603]:
-                return -1
+            error_str = str(e)
+            if 'Too Many Requests' in error_str:
+                sleep(attempt*30 + QUERY_COOLDOWN)
+            elif "Could not decode contract function" in error_str:
+                # probably the contract is not deployed at this block
+                return 0
+            else:
+                eroror_code = get_web3_error_code(e)
+                # provider has no data at this block: "historical state is not available" or "state is pruned"
+                if eroror_code is not None and eroror_code in [-32000, -32603]:
+                    return -1
     return 0
 
 
@@ -107,7 +116,7 @@ for (pool_name, pool_addr) in [('wBTC', wBTC_pool_addr), ('cbBTC', cbBTC_pool_ad
     contract_pools[pool_name] = w3.eth.contract(address=pool_addr, abi=yieldbasis_pool_abi)
 
 
-blocks_per_day = 24*60*60//12 # eth mainnet has ~12 seconds per block
+blocks_per_day = 24*60*60 // 12 # eth mainnet has ~12 seconds per block
 
 current_block = w3.eth.get_block_number()
 current_block_timestamp = get_block_timestamp(w3, current_block)
